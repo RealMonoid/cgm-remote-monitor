@@ -260,9 +260,25 @@ Zeitlich **nein** (12 neue Monate, 13/15 Holm-signifikant). Über Assets **teilw
 anekdotisch). Als laufender Indikator: auf 15 min **ja** (negativ) → abgeschaltet.
 
 ### 7.4 Hängt der Effekt an Parametern?
-Siehe `results/robustness_5m.csv` (Raster für Schockschwelle log 3/4/5, Vorlauffenster
-6/12/24, Abklingexponent 0.3/0.5/1.0 – vollständig berichtet, Auswertung in §7.4a des
-README-Nachtrags bzw. der CSV). Die κ-Komponente hat außer dem 6-Bar-Mittel keine Parameter.
+Raster auf 5 min, 5 Entwicklungs-Assets, alle Werte berichtet (`results/robustness_5m.csv`),
+Skill auf `y_vol`:
+
+| Parameter | Wert | Schock-Gedächtnis vs. KNOWN | Endo-Komponente B (alle Zeilen) | B (nur Episoden) |
+|---|---|---|---|---|
+| Schockschwelle | log 3 | +0.46 % (5/5 > 0) | +0.09 % (5/5) | +0.29 % (5/5) |
+| | **log 4** (a priori) | +0.42 % (5/5) | +0.03 % (5/5) | +0.16 % (3/5) |
+| | log 5 | +0.37 % (5/5) | −0.02 % (1/5) | −0.27 % (2/5) |
+| Vorlauffenster | 6 | – | +0.04 % (5/5) | +0.16 % (3/5) |
+| | **12** | – | +0.03 % (5/5) | +0.16 % (3/5) |
+| | 24 | – | −0.01 % (2/5) | −0.03 % (2/5) |
+| Abklingexponent | 0.3 / **0.5** / 1.0 | +0.37 / +0.42 / +0.39 % | +0.03 / +0.03 / +0.02 % | +0.15 / +0.16 / +0.11 % |
+
+Bewertung: Das (bekannte) Schock-Gedächtnis ist **parameterrobust**. Die Endo-Komponente B
+ist auf 5 min **klein und parameterabhängig** (verschwindet bei seltenen Schocks bzw. langem
+Vorlauffenster) – ein Warnsignal; ihre stärkere Evidenz liegt auf 1 min (dort kein Raster
+gerechnet: Rechenzeit). Die κ-Komponente hat außer dem 6-Bar-Mittel keine Parameter. Die
+extremen negativen `y_tail`-Werte bei log 5 sind Konvergenzfehler der Logistik bei seltenen
+Ereignissen, keine Information.
 
 ### 7.5 Versteckte Informationslecks?
 Geprüft: Merkmals-Kausalität (Trunkierungstest), Tageszeitprofil nur aus Vortagen, Purge
