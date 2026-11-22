@@ -1,0 +1,293 @@
+//@version=6
+// =====================================================================================
+// Activity Persistence (APX) — EXPERIMENTAL RESEARCH INDICATOR, NO VALIDATED TRADING EDGE
+// NOT A BUY/SELL SIGNAL: its outputs carry no directional information (tested in round 2:
+// sign hit rate 50 %, docs/DIAGNOSIS_FTA.md). Use only as a risk / activity forecast.
+// -------------------------------------------------------------------------------------
+// Question answered: "How large will the total high-low range of the next H bars be,
+// relative to what is normal for this time of day — and is the CURRENT activity likely
+// to persist (gradually built-up) or to fade quickly (abrupt burst)?"
+//
+// Output (log scale, 0 = normal for this time of day; +0.69 = 2x normal):
+//   BASE  : online-learned forecast from known information (HAR range memory, volume
+//           surprise, vol-of-vol, recent extremes, shock memory, intrabar path length)
+//   delta : ABRUPTNESS ADJUSTMENT with FROZEN coefficients estimated offline on
+//           2023-01..2025-10 crypto data (docs/SPECIFICATION.md §4):
+//             - intrabar volume concentration (activity squeezed into few minutes) -> fades
+//             - pre-shock build-up (activity rose before the shock)              -> persists
+//   FULL  : BASE + delta
+// Hypothesis: "abruptly arriving activity is transient" (Sornette & Helmstetter 2003,
+// endogenous vs exogenous shocks). See docs/RESEARCH_REPORT.md for the evidence and its
+// limits: the effect is SMALL (deployed holdout: +0.1 % at 1m, +0.4 % at 5m MSE skill),
+// documented only for liquid crypto, and it FAILED at 15m (delta is switched off there).
+//
+// Causality: state is updated on confirmed bars only; the forecast of bar t-H is scored
+// and learned only at the close of bar t. Unconfirmed realtime values are drawn as circles
+// (provisional). Lower-timeframe data (1m) come from request.security_lower_tf; they only
+// describe the already-formed part of the current bar. No future bars, no lookahead.
+// =====================================================================================
+indicator("Activity Persistence [experimental]", shorttitle = "APX", overlay = false, precision = 3, max_bars_back = 600)
+
+// ---------------- inputs ----------------
+H        = input.int(12, "Horizon H (bars)", minval = 2, maxval = 48, tooltip = "Forecast refers to the summed range of bars t+1..t+H")
+useLTF   = input.bool(true, "Use 1-minute intrabar data (needed for the intrabar part of delta)")
+zAlert   = input.float(1.5, "Alert threshold for |delta| (in running SDs)", minval = 0.5, step = 0.1)
+showBase = input.bool(true, "Show BASE forecast")
+showTbl  = input.bool(true, "Show diagnostics table")
+
+// ---------------- fixed a-priori constants ----------------
+const float ALPHA_DAY  = 1.0 / 20.0
+const int   SHOCK_BASE = 48
+const int   PRE_S      = 12
+const int   PRE_L      = 288
+const int   EPISODE    = 48
+const float DECAY_P    = 0.5
+const float THETA      = 1.3862943611198906   // log(4): shock = range 4x local level
+const float LAM        = 0.9995
+const float RHO        = 20.0                  // ridge penalty = 1 % of effective sample 1/(1-LAM)
+const float STD_A      = 1.0 / 2000.0
+const int   WARM       = 500
+const int   HMAX       = 49
+const int   NB         = 14                    // BASE features (12 core + 2 intrabar path)
+const int   NA_        = 4                     // abruptness features
+
+// ---------------- timeframe ----------------
+tfSec  = timeframe.in_seconds()
+tfMin  = math.max(1, int(math.round(tfSec / 60.0)))
+nBk    = int(math.ceil(1440.0 / tfMin))
+bucket = int(math.floor((hour(time, "UTC") * 60 + minute(time, "UTC")) / tfMin)) % nBk
+bpd    = 1440.0 / tfMin
+gap    = na(time[1]) or (time - time[1]) > 1.5 * tfSec * 1000
+hasLTF = useLTF and tfMin >= 2 and timeframe.isintraday
+
+// frozen abruptness coefficients (per SD of the online-standardised feature), estimated on
+// development data only (results/frozen_coefficients.json). Order: conc, conc6, B, B*M.
+// Holdout of the deployed model (2025-11..2026-10, 10 assets, results/holdout_deployed.csv):
+//   1m: +0.09 % mean MSE skill (7/10 assets > 0)   5m: +0.39 % (9/10 > 0)
+//   15m: -0.62 % (9/10 < 0)  -> delta is SWITCHED OFF for charts >= 10 minutes.
+deltaOn = tfMin <= 9
+coefSet = tfMin <= 2 ? array.from(0.0, 0.0, 0.0496, -0.0244) : array.from(-0.0046, -0.0280, 0.0432, -0.0314)
+validTF = tfMin == 1 or tfMin == 5
+
+// ---------------- time-of-day normalisation (confirmed-bar state) ----------------
+var array<float> profR = array.new<float>(nBk, na)
+var array<float> profV = array.new<float>(nBk, na)
+var float lvlR = na
+var float lvlV = na
+rng  = math.log(high / low)
+epsR = na(lvlR) ? na : 0.1 * lvlR
+lr   = math.log(rng + epsR)
+dR   = profR.get(bucket)
+x    = lr - dR                                   // log range vs time-of-day norm
+sig  = math.exp(dR)                              // typical bar range at this time of day
+ret  = gap ? math.log(close / open) : math.log(close / close[1])
+z    = ret / sig
+vol  = nz(volume)
+epsV = na(lvlV) ? na : 0.01 * lvlV
+lv   = math.log(vol + epsV + 1e-12)
+dV   = profV.get(bucket)
+u    = na(dV) ? 0.0 : lv - dV
+if barstate.isconfirmed
+    profR.set(bucket, na(dR) ? lr : dR + ALPHA_DAY * (lr - dR))
+    profV.set(bucket, na(dV) ? lv : dV + ALPHA_DAY * (lv - dV))
+    lvlR := na(lvlR) ? rng : lvlR + (rng - lvlR) / (bpd * 5)
+    lvlV := na(lvlV) ? vol : lvlV + (vol - lvlV) / (bpd * 5)
+
+// ---------------- intrabar structure (1-minute bars inside the chart bar) ----------------
+[ivol, irng] = request.security_lower_tf(syminfo.tickerid, "1", [volume, math.log(high / low)], ignore_invalid_timeframe = true)
+float conc = na
+float path = na
+if hasLTF and not na(ivol) and ivol.size() > 0
+    float vs = 0.0
+    float v2 = 0.0
+    float rs = 0.0
+    for i = 0 to ivol.size() - 1
+        vi = nz(ivol.get(i))
+        vs += vi
+        v2 += vi * vi
+        rs += nz(irng.get(i))
+    conc := math.log(ivol.size() * v2 / (vs * vs + 1e-18) + 1e-12)   // 0 = volume spread evenly
+    path := math.log(rs / (rng + 1e-12) + 1e-12)                     // intrabar path excess
+conc6 = ta.sma(conc, 6)
+path6 = ta.sma(path, 6)
+
+// ---------------- known-information features ----------------
+m6    = ta.sma(x, 6)
+m48   = ta.sma(x, 48)
+m288  = ta.sma(x, 288)
+zabs6 = ta.sma(math.abs(z), 6)
+u6    = ta.sma(u, 6)
+u48   = ta.sma(u, 48)
+vov   = ta.stdev(x, 120, false)
+xmax  = ta.highest(x, 48)
+s     = x - ta.sma(x[1], SHOCK_BASE)
+shock = s > THETA
+nsh   = math.sum(shock ? 1.0 : 0.0, 288)
+
+// ---------------- shock episode: memory (known) and build-up B (abruptness) ----------------
+build = ta.sma(x[1], PRE_S) - ta.sma(x[1 + PRE_S], PRE_L - PRE_S)
+var int   lastShock = na
+var float mShock    = na
+var float bShock    = na
+curIsShock = shock and not na(build)
+ageNow = curIsShock ? 0 : (na(lastShock) ? na : bar_index - lastShock)
+mNow   = curIsShock ? s : mShock
+bNow   = curIsShock ? build : bShock
+live   = not na(ageNow) and ageNow <= EPISODE
+w      = live ? math.pow(1.0 + ageNow, -DECAY_P) : 0.0
+fLive  = live ? 1.0 : 0.0
+fM     = live ? mNow * w : 0.0
+fB     = live ? bNow * w : 0.0
+fBM    = live ? bNow * mNow * w : 0.0
+if barstate.isconfirmed and curIsShock
+    lastShock := bar_index
+    mShock    := s
+    bShock    := build
+
+// ---------------- matured target of bar t-H ----------------
+// y(t-H) = log( (sum of ranges of bars t-H+1..t + H*eps(t-H)) / sum of their time-of-day norms )
+yMat = math.log((math.sum(rng, H) + H * nz(epsR[H])) / math.sum(sig, H))
+
+// ---------------- online standardisation helper state ----------------
+var array<float> muB = array.new<float>(NB, na)
+var array<float> vaB = array.new<float>(NB, 1.0)
+var array<float> muA = array.new<float>(NA_, na)
+var array<float> vaA = array.new<float>(NA_, 1.0)
+var array<float> th  = array.new<float>(NB + 1, 0.0)
+var matrix<float> A  = matrix.new<float>(NB + 1, NB + 1, 0.0)   // EW Gram matrix  sum lam^k z z'
+var array<float>  bv = array.new<float>(NB + 1, 0.0)            // EW moment vector sum lam^k z y
+var matrix<float> zBuf = matrix.new<float>(HMAX, NB + 1, na)
+var array<float> fBufB = array.new<float>(HMAX, na)
+var array<float> fBufF = array.new<float>(HMAX, na)
+var int   nLearn = 0
+var float mseB = na
+var float mseF = na
+var float dVar = na
+
+// on a 1-minute chart (no intrabar data) the path features are constant 0 (not used)
+pathF  = hasLTF ? path : 0.0
+path6F = hasLTF ? path6 : 0.0
+concF  = hasLTF ? conc : 0.0
+conc6F = hasLTF ? conc6 : 0.0
+rawB = array.from(x, m6, m48, m288, zabs6, u6, u48, vov, xmax, nsh, fLive, fM, pathF, path6F)
+rawA = array.from(concF, conc6F, fB, fBM)
+
+standardise(array<float> raw, array<float> mu, array<float> va, int k) =>
+    out = array.new<float>(k, 0.0)
+    for i = 0 to k - 1
+        m0 = mu.get(i)
+        zz = na(m0) ? 0.0 : (raw.get(i) - m0) / math.sqrt(va.get(i) + 1e-12)
+        out.set(i, math.max(-6.0, math.min(6.0, zz)))
+    out
+
+updateStats(array<float> raw, array<float> mu, array<float> va, int k) =>
+    for i = 0 to k - 1
+        m0 = mu.get(i)
+        xi = raw.get(i)
+        if na(m0)
+            mu.set(i, xi)
+        else
+            d = xi - m0
+            mu.set(i, m0 + STD_A * d)
+            va.set(i, (1 - STD_A) * (va.get(i) + STD_A * d * d))
+
+allOk(array<float> a) =>
+    bool ok = true
+    for v in a
+        ok := ok and not na(v)
+    ok
+
+okB = allOk(rawB)
+okA = allOk(rawA)
+zB  = okB ? standardise(rawB, muB, vaB, NB) : array.new<float>(NB, na)
+zA  = okA ? standardise(rawA, muA, vaA, NA_) : array.new<float>(NA_, na)
+zRow = array.new<float>(NB + 1, 1.0)
+for i = 0 to NB - 1
+    zRow.set(i + 1, zB.get(i))
+
+slotNow = bar_index % HMAX
+slotOld = (bar_index - H) % HMAX
+if barstate.isconfirmed
+    if okB
+        updateStats(rawB, muB, vaB, NB)
+    if okA
+        updateStats(rawA, muA, vaA, NA_)
+    // learn BASE from the matured target of bar t-H: exponentially weighted RIDGE regression
+    //   A = LAM*A + z z',  b = LAM*b + z y,  theta = (A + RHO*D)^-1 b   (D: no intercept penalty)
+    // (plain RLS with forgetting diverged in long offline replays -> SPECIFICATION.md §7)
+    if bar_index >= H and not na(yMat) and not na(zBuf.get(slotOld, 0))
+        zo = zBuf.row(slotOld)
+        fb0 = fBufB.get(slotOld)
+        ff0 = fBufF.get(slotOld)
+        if not na(fb0) and not na(ff0)     // running OOS scores (forecasts made before y existed)
+            a = 1.0 / 2000.0
+            mseB := na(mseB) ? math.pow(yMat - fb0, 2) : mseB + a * (math.pow(yMat - fb0, 2) - mseB)
+            mseF := na(mseF) ? math.pow(yMat - ff0, 2) : mseF + a * (math.pow(yMat - ff0, 2) - mseF)
+        for i = 0 to NB
+            zi = zo.get(i)
+            bv.set(i, LAM * bv.get(i) + zi * yMat)
+            for j = 0 to NB
+                A.set(i, j, LAM * A.get(i, j) + zi * zo.get(j))
+        R = A.copy()
+        R.set(0, 0, R.get(0, 0) + 1e-6)
+        for i = 1 to NB
+            R.set(i, i, R.get(i, i) + RHO)
+        th := R.inv().mult(bv)
+        nLearn += 1
+
+// ---------------- forecasts ----------------
+ready = okB and nLearn >= WARM
+float fBase = na
+if ready
+    float acc = 0.0
+    for i = 0 to NB
+        acc += th.get(i) * zRow.get(i)
+    fBase := acc
+float delta = na
+if okA and deltaOn
+    float acc = 0.0
+    for i = 0 to NA_ - 1
+        acc += coefSet.get(i) * zA.get(i)
+    delta := acc
+fFull = ready ? (deltaOn ? (na(delta) ? na : fBase + delta) : fBase) : na
+if barstate.isconfirmed
+    for j = 0 to NB
+        zBuf.set(slotNow, j, okB ? zRow.get(j) : na)
+    fBufB.set(slotNow, fBase)
+    fBufF.set(slotNow, fFull)
+    if not na(delta)
+        dVar := na(dVar) ? delta * delta : dVar + (delta * delta - dVar) / 2000.0
+
+// ---------------- display ----------------
+prov   = not barstate.isconfirmed
+dZ     = na(dVar) or dVar <= 0 or na(delta) ? na : delta / math.sqrt(dVar)
+skill  = na(mseB) or mseB <= 0 ? na : 1 - mseF / mseB
+colF   = prov ? color.new(color.orange, 50) : fFull > 0.41 ? color.red : fFull > 0.18 ? color.orange : color.teal
+hline(0, "normal for time of day", color.new(color.gray, 50), hline.style_dotted)
+plot(prov ? na : fFull, "FULL forecast: log(next-H range / norm)", colF, 2)
+plot(prov ? fFull : na, "FULL forecast (provisional, unconfirmed bar)", colF, 3, plot.style_circles)
+plot(showBase ? fBase : na, "BASE forecast (known information only)", color.new(color.gray, 20), 1)
+plot(delta, "delta: abruptness adjustment (<0 fades, >0 persists)", delta >= 0 ? color.new(color.red, 40) : color.new(color.blue, 40), 1, plot.style_histogram)
+plot(m6, "current activity: 6-bar mean log range vs norm", color.new(color.purple, 70), 1)
+plotshape(barstate.isconfirmed and curIsShock, "Shock bar", shape.circle, location.bottom, color.purple, size = size.tiny)
+plot(skill, "diag: running OOS MSE skill FULL vs BASE", display = display.data_window)
+plot(nLearn, "diag: matured targets learned", display = display.data_window)
+
+fmt(float v, string d) => na(v) ? "n/a" : str.tostring(v, d)
+var table tb = table.new(position.top_right, 2, 9, bgcolor = color.new(color.black, 85), border_width = 1)
+if showTbl and barstate.islast
+    tb.cell(0, 0, "APX (experimental)", text_color = color.white), tb.cell(1, 0, prov ? "provisional bar" : "confirmed bar", text_color = color.white)
+    tb.cell(0, 1, "next-H range vs norm FULL", text_color = color.white), tb.cell(1, 1, na(fFull) ? "n/a" : str.tostring(math.exp(fFull), "0.00") + "x", text_color = color.white)
+    tb.cell(0, 2, "BASE (known info)", text_color = color.white), tb.cell(1, 2, na(fBase) ? "n/a" : str.tostring(math.exp(fBase), "0.00") + "x", text_color = color.white)
+    tb.cell(0, 3, "delta / in SDs", text_color = color.white), tb.cell(1, 3, fmt(delta, "0.000") + " / " + fmt(dZ, "0.0"), text_color = na(delta) ? color.white : delta < 0 ? color.aqua : color.orange)
+    tb.cell(0, 4, "shock episode age / B", text_color = color.white), tb.cell(1, 4, live ? str.tostring(ageNow) + " / " + fmt(bNow, "0.00") : "none", text_color = color.white)
+    tb.cell(0, 5, "running OOS MSE skill FULL vs BASE", text_color = color.white), tb.cell(1, 5, fmt(skill * 100, "0.00") + " %", text_color = na(skill) ? color.white : skill > 0 ? color.lime : color.red)
+    tb.cell(0, 6, "matured targets learned", text_color = color.white), tb.cell(1, 6, str.tostring(nLearn) + (nLearn < WARM ? " (warming up)" : ""), text_color = color.white)
+    tb.cell(0, 7, "intrabar data", text_color = color.white), tb.cell(1, 7, hasLTF ? (okA ? "1m ok" : "1m missing on this bar") : "off (1m chart or disabled)", text_color = color.white)
+    tb.cell(0, 8, "timeframe status", text_color = color.white), tb.cell(1, 8, not deltaOn ? "delta OFF (failed holdout >= 10m): FULL = BASE" : validTF ? "studied (1m / 5m)" : "NOT studied – coefficients extrapolated", text_color = validTF ? color.white : color.yellow)
+
+// ---------------- alerts (confirmed bars only) ----------------
+elevated = m6 > 0.41    // current activity > 1.5x time-of-day norm
+alertcondition(barstate.isconfirmed and ready and elevated and dZ <= -zAlert, "APX: elevated activity, abrupt (expected to fade)", "{{ticker}} {{interval}}: elevated activity looks abrupt – forecast says it fades faster than baseline")
+alertcondition(barstate.isconfirmed and ready and elevated and dZ >= zAlert, "APX: elevated activity, built-up (expected to persist)", "{{ticker}} {{interval}}: elevated activity looks built-up – forecast says it persists longer than baseline")
+alertcondition(barstate.isconfirmed and curIsShock, "APX: shock bar", "{{ticker}} {{interval}}: shock bar (range > 4x local level)")
