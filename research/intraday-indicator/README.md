@@ -1,5 +1,10 @@
 # Intraday-Forschungsprojekt: „Activity Persistence“ (APX)
 
+> **Runde 2 (Diagnose für Kauf-/Verkaufssignale):** APX liefert **keine** Richtungsinformation
+> (Trefferquote 50 %). Drei präregistrierte neue Richtungs-Hypothesen sind bereits in der
+> Entwicklungsstufe nach Kosten gescheitert. **Entscheidung: Verwerfung als Signalgeber; kein
+> Signalindikator ausgeliefert.** Details: `docs/DIAGNOSIS_FTA.md`.
+
 **Status: experimentell. Kein nachgewiesener Handelsvorteil.**
 Das Projekt untersucht, ob sich aus OHLCV-Daten eine bislang wenig genutzte, entscheidungs-
 relevante Information über kurzfristige Marktaktivität gewinnen lässt, und setzt den am
@@ -17,6 +22,8 @@ Spanne, zusätzlich zu einer starken Baseline) und **richtungsneutral**. Richtun
 |---|---|
 | `docs/RESEARCH_REPORT.md` | Forschungsbericht: Kandidaten, Auswahl, Ergebnisse, Holdout, kritische Bewertung, Anwendungsfälle |
 | `docs/SPECIFICATION.md` | Mathematische Spezifikation des Indikators |
+| `docs/DIAGNOSIS_FTA.md` | Runde 2: forensische Diagnose, Fehlerbaum, Richtungstests, Entscheidung |
+| `docs/PREREGISTRATION_DIRECTION.md` | Vorab festgelegte Richtungs-Hypothesen und Abbruchkriterien |
 | `docs/LITERATURE.md` | Literatur- und Prior-Art-Recherche (mit DOIs, Verifikationsstatus) |
 | `pine/ActivityPersistence.pine` | **Finaler Indikator** (Pine v6, kompiliert und auf TradingView ausgeführt) |
 | `pine/archive/AftershockHazard.pine` | Verworfener erster Prototyp (dokumentiert, nicht verwenden) |
@@ -46,7 +53,12 @@ python eval_online.py          # verworfener Logistik-Prototyp, wie auf dem Char
 # 5) Eingefrorene Spezifikation: Koeffizienten (nur Entwicklungsdaten) und Holdout
 python holdout.py fit
 python holdout.py test
-# 6) Parameter-Robustheit
+# 6) Runde 2: Diagnose und präregistrierte Richtungsstudie
+python download_binance.py --symbols BTCUSDT ETHUSDT SOLUSDT XRPUSDT BNBUSDT --start 2021-01 --end 2022-12 --out ../data/early
+python download_binance.py --symbols TRXUSDT DOTUSDT ATOMUSDT BCHUSDT NEARUSDT --start 2023-01 --end 2026-10 --out ../data/fresh
+python diagnose_apx.py
+python direction_study.py --stage DEV
+# 7) Parameter-Robustheit
 python ablation.py --skip-ablation --grid-tf 5 --grid-params shock_theta pre_short decay_p --grid-out robustness_5m.csv
 ```
 

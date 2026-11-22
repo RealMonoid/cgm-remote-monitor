@@ -50,3 +50,12 @@ Per Websuche gefundene öffentliche TradingView-Skripte (nur Beschreibungstexte 
 (b) einer **online kalibrierten Wahrscheinlichkeit** für Folgeschocks und
 (c) einem **Out-of-Sample-Nachweis des Zusatznutzens gegenüber HAR + Volumen + etablierten Indikatoren**.
 Weltweite Neuheit wird ausdrücklich **nicht** beansprucht; die Suche war auf Websuche beschränkt (kein Zugriff auf kommerzielle Indikatorbibliotheken, kein Volltextzugang zu allen Arbeiten).
+
+## 4. Ergänzungen Runde 2 (Richtung)
+
+| Quelle | DOI / URL | Relevanz |
+|---|---|---|
+| Campbell, J. Y., Grossman, S. J., Wang, J. (1993): *Trading volume and serial correlation in stock returns.* QJE 108(4), 905–939 | RePEc: oup:qjecon:v:108:y:1993:i:4:p:905-939 | Bewegungen bei hohem Volumen kehren eher um → Grundlage C2 |
+| Bianchi, D., Babiak, M., Dickerson, A. (2022): *Trading volume and liquidity provision in cryptocurrency markets.* Riksbank WP 413 | riksbank.se (WP 413) | Krypto (täglich): Umkehr stärker bei niedrigem Volumen → Vorzeichen C2 |
+| Aubrun, C., Morel, R., Benzaquen, M., Bouchaud, J.-P. (2024): *Riding wavelets: a method to discover new classes of price jumps.* | arXiv:2404.16467 | Unterscheidung umkehrender vs. trendender Sprünge → Grundlage C1 |
+| Kurihara, Y., Matsumoto (Asia-Pacific Financial Markets): Lead-Lag Bitcoin → Altcoins, 1-Min-Daten | (Details nicht verifiziert) | Grundlage C3 |

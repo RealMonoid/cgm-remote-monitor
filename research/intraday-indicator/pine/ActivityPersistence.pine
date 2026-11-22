@@ -1,6 +1,8 @@
 //@version=6
 // =====================================================================================
 // Activity Persistence (APX) — EXPERIMENTAL RESEARCH INDICATOR, NO VALIDATED TRADING EDGE
+// NOT A BUY/SELL SIGNAL: its outputs carry no directional information (tested in round 2:
+// sign hit rate 50 %, docs/DIAGNOSIS_FTA.md). Use only as a risk / activity forecast.
 // -------------------------------------------------------------------------------------
 // Question answered: "How large will the total high-low range of the next H bars be,
 // relative to what is normal for this time of day — and is the CURRENT activity likely
