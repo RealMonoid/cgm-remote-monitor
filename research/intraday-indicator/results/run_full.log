@@ -1,0 +1,24 @@
+done ('BTCUSDT', 15, 'binance') 40
+done ('ETHUSDT', 15, 'binance') 40
+done ('SOLUSDT', 15, 'binance') 40
+done ('XRPUSDT', 15, 'binance') 40
+done ('BNBUSDT', 15, 'binance') 40
+done ('BTCUSDT', 5, 'binance') 40
+done ('ETHUSDT', 5, 'binance') 40
+done ('SOLUSDT', 5, 'binance') 40
+done ('XRPUSDT', 5, 'binance') 40
+done ('BNBUSDT', 5, 'binance') 40
+done ('BTCUSDT', 1, 'binance') 36
+done ('ETHUSDT', 1, 'binance') 36
+done ('SOLUSDT', 1, 'binance') 36
+done ('XRPUSDT', 1, 'binance') 36
+done ('BNBUSDT', 1, 'binance') 36
+done ('SPY', 5, 'yahoo') 24
+done ('QQQ', 5, 'yahoo') 30
+done ('IWM', 5, 'yahoo') 30
+done ('ES_F', 5, 'yahoo') 30
+done ('NQ_F', 5, 'yahoo') 36
+done ('GC_F', 5, 'yahoo') 30
+done ('CL_F', 5, 'yahoo') 30
+done ('EURUSD_X', 5, 'yahoo') 30
+primary tests: 333
